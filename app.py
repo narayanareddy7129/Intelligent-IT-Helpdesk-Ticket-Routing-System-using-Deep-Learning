@@ -1,8 +1,11 @@
 import pickle
+
 import numpy as np
 import pandas as pd
 import streamlit as st
+import torch
 from tensorflow.keras.models import load_model
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from utils import preprocess_text
 
@@ -17,24 +20,62 @@ st.set_page_config(
 )
 
 # ==========================================================
-# Load Model & Resources
+# Paths — adjust these if your folder layout differs
+# ==========================================================
+
+TOKENIZER_PATH = "tokenizer.pkl"
+LABEL_ENCODER_PATH = "label_encoder.pkl"
+
+RNN_MODEL_PATHS = {
+    "GRU": "models/gru_model.keras",
+    "LSTM": "models/lstm_model.keras",
+    "BiLSTM": "models/bilstm_model.keras",
+}
+
+BERT_MODEL_DIR = "bert_ticket_classifier"
+
+# Max length used when tokenizing text for BERT. This wasn't specified
+# in config.json (that only stores max_position_embeddings=512, the
+# model's absolute ceiling) — 128 is a common default for short ticket
+# text. If BERT was fine-tuned with a different max_length, change this
+# to match, or predictions may be less accurate on long tickets.
+BERT_MAX_LEN = 128
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# ==========================================================
+# Load Resources
 # ==========================================================
 
 @st.cache_resource
-def load_resources():
+def load_shared_resources():
+    """Keras tokenizer + label encoder, shared by GRU/LSTM/BiLSTM and
+    used to decode BERT's predicted class index back to a category name."""
 
-    model = load_model("gru_model.keras")
-
-    with open("tokenizer.pkl", "rb") as f:
+    with open(TOKENIZER_PATH, "rb") as f:
         tokenizer = pickle.load(f)
 
-    with open("label_encoder.pkl", "rb") as f:
+    with open(LABEL_ENCODER_PATH, "rb") as f:
         label_encoder = pickle.load(f)
 
-    return model, tokenizer, label_encoder
+    return tokenizer, label_encoder
 
 
-model, tokenizer, label_encoder = load_resources()
+@st.cache_resource
+def load_rnn_model(model_name):
+    return load_model(RNN_MODEL_PATHS[model_name])
+
+
+@st.cache_resource
+def load_bert_resources():
+    bert_tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_DIR)
+    bert_model = AutoModelForSequenceClassification.from_pretrained(BERT_MODEL_DIR)
+    bert_model.to(DEVICE)
+    bert_model.eval()
+    return bert_tokenizer, bert_model
+
+
+keras_tokenizer, label_encoder = load_shared_resources()
 
 # ==========================================================
 # Sidebar
@@ -42,11 +83,17 @@ model, tokenizer, label_encoder = load_resources()
 
 st.sidebar.title("🎫 Project Information")
 
-st.sidebar.markdown("""
+model_choice = st.sidebar.selectbox(
+    "Choose Model",
+    ["GRU", "LSTM", "BiLSTM", "BERT"]
+)
+
+ARCH_INFO = {
+    "GRU": """
 ## Model
 
 - **Architecture:** GRU
-- **Framework:** TensorFlow
+- **Framework:** TensorFlow / Keras
 - **Embedding Dimension:** 128
 - **Max Sequence Length:** 300
 
@@ -65,31 +112,127 @@ st.sidebar.markdown("""
 ## Deep Learning Pipeline
 
 Text
-
 ⬇
-
 Preprocessing
-
 ⬇
-
 Tokenizer
-
 ⬇
-
 Embedding
-
 ⬇
-
 GRU
-
 ⬇
-
 Dense
-
 ⬇
-
 Softmax
-""")
+""",
+    "LSTM": """
+## Model
+
+- **Architecture:** LSTM
+- **Framework:** TensorFlow / Keras
+- **Embedding Dimension:** 128
+- **Max Sequence Length:** 300
+
+---
+
+## Preprocessing
+
+- Lowercase
+- Contraction Expansion
+- Remove Special Characters
+- Tokenization
+- Padding
+
+---
+
+## Deep Learning Pipeline
+
+Text
+⬇
+Preprocessing
+⬇
+Tokenizer
+⬇
+Embedding
+⬇
+LSTM
+⬇
+Dense
+⬇
+Softmax
+""",
+    "BiLSTM": """
+## Model
+
+- **Architecture:** Bidirectional LSTM
+- **Framework:** TensorFlow / Keras
+- **Embedding Dimension:** 128
+- **Max Sequence Length:** 300
+
+---
+
+## Preprocessing
+
+- Lowercase
+- Contraction Expansion
+- Remove Special Characters
+- Tokenization
+- Padding
+
+---
+
+## Deep Learning Pipeline
+
+Text
+⬇
+Preprocessing
+⬇
+Tokenizer
+⬇
+Embedding
+⬇
+Bidirectional LSTM
+⬇
+Dense
+⬇
+Softmax
+""",
+    "BERT": f"""
+## Model
+
+- **Architecture:** BERT (bert-base-uncased)
+- **Framework:** Hugging Face Transformers (PyTorch)
+- **Hidden Size:** 768
+- **Layers / Heads:** 12 / 12
+- **Max Sequence Length:** {BERT_MAX_LEN}
+
+---
+
+## Preprocessing
+
+- WordPiece Tokenization
+- Truncation / Padding
+- Attention Mask
+
+---
+
+## Deep Learning Pipeline
+
+Text
+⬇
+WordPiece Tokenizer
+⬇
+BERT Encoder (12 layers)
+⬇
+[CLS] Pooled Output
+⬇
+Dense
+⬇
+Softmax
+""",
+}
+
+st.sidebar.markdown(ARCH_INFO[model_choice])
 
 # ==========================================================
 # Main Title
@@ -99,31 +242,11 @@ st.title("🎫 Intelligent Helpdesk Ticket Classifier")
 
 st.markdown("""
 This application predicts the **department/category**
-for customer support tickets using a **GRU-based Deep Learning model**.
+for customer support tickets using your choice of a
+**GRU, LSTM, BiLSTM, or BERT** model.
 """)
 
 st.divider()
-
-# ==========================================================
-# Sample Tickets
-# ==========================================================
-
-# sample_ticket = st.selectbox(
-#     "Choose a Sample Ticket (Optional)",
-#     [
-#         "None",
-#         "I cannot login to my account after resetting my password.",
-#         "My internet connection is very slow and keeps disconnecting.",
-#         "I was charged twice for my subscription.",
-#         "My laptop is overheating during normal usage.",
-#         "The VPN connection is failing every morning."
-#     ]
-# )
-
-default_text = ""
-
-# if sample_ticket != "None":
-#     default_text = sample_ticket
 
 # ==========================================================
 # User Input
@@ -131,7 +254,7 @@ default_text = ""
 
 ticket = st.text_area(
     "Enter Support Ticket",
-    value=default_text,
+    value="",
     height=220,
     placeholder="Describe your issue..."
 )
@@ -146,22 +269,50 @@ if st.button("🚀 Predict Category", use_container_width=True):
         st.warning("Please enter a support ticket.")
         st.stop()
 
-    cleaned_text, processed_text = preprocess_text(
-        ticket,
-        tokenizer
-    )
+    if model_choice == "BERT":
 
-    prediction = model.predict(
-        processed_text,
-        verbose=0
-    )
+        with st.spinner("Loading BERT model..."):
+            bert_tokenizer, bert_model = load_bert_resources()
 
-    predicted_index = np.argmax(prediction)
+        display_text = ticket.strip()
 
-    confidence = float(
-        prediction[0][predicted_index]
-    )
+        encoded = bert_tokenizer(
+            display_text,
+            return_tensors="pt",
+            truncation=True,
+            padding="max_length",
+            max_length=BERT_MAX_LEN,
+        ).to(DEVICE)
 
+        with torch.no_grad():
+            logits = bert_model(**encoded).logits
+
+        probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+
+    else:
+
+        with st.spinner(f"Loading {model_choice} model..."):
+            rnn_model = load_rnn_model(model_choice)
+
+        display_text, processed_text = preprocess_text(
+            ticket,
+            keras_tokenizer
+        )
+
+        prediction = rnn_model.predict(
+            processed_text,
+            verbose=0
+        )
+
+        probs = prediction[0]
+
+    predicted_index = int(np.argmax(probs))
+
+    confidence = float(probs[predicted_index])
+
+    # NOTE: assumes BERT was fine-tuned on the same label-encoded
+    # targets as the RNN models — config.json only stores generic
+    # LABEL_0..LABEL_7, so real category names come from label_encoder.
     predicted_category = label_encoder.inverse_transform(
         [predicted_index]
     )[0]
@@ -197,8 +348,6 @@ if st.button("🚀 Predict Category", use_container_width=True):
 
     st.subheader("🏆 Top 3 Predictions")
 
-    probs = prediction[0]
-
     top3 = np.argsort(probs)[::-1][:3]
 
     top3_df = pd.DataFrame({
@@ -224,12 +373,17 @@ if st.button("🚀 Predict Category", use_container_width=True):
     )
 
     # ======================================================
-    # Cleaned Text
+    # Processed Text
     # ======================================================
 
-    with st.expander("📝 View Cleaned Text"):
+    expander_label = (
+        "📝 View Cleaned Text" if model_choice != "BERT"
+        else "📝 View Text Sent to Model"
+    )
 
-        st.code(cleaned_text)
+    with st.expander(expander_label):
+
+        st.code(display_text)
 
 # ==========================================================
 # Footer
@@ -238,5 +392,5 @@ if st.button("🚀 Predict Category", use_container_width=True):
 st.divider()
 
 st.caption(
-    "Developed using TensorFlow • GRU • NLP • Streamlit"
+    "Developed using TensorFlow • PyTorch • Transformers • NLP • Streamlit"
 )
