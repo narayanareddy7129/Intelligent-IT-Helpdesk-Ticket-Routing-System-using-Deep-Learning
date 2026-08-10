@@ -1,3 +1,4 @@
+import os
 import pickle
 
 import numpy as np
@@ -8,6 +9,8 @@ from tensorflow.keras.models import load_model
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from utils import preprocess_text
+from gemini_model import gemini_predict
+
 
 # ==========================================================
 # Page Configuration
@@ -19,8 +22,9 @@ st.set_page_config(
     layout="wide"
 )
 
+
 # ==========================================================
-# Paths — adjust these if your folder layout differs
+# Paths
 # ==========================================================
 
 TOKENIZER_PATH = "tokenizer.pkl"
@@ -34,14 +38,12 @@ RNN_MODEL_PATHS = {
 
 BERT_MODEL_DIR = "bert_ticket_classifier"
 
-# Max length used when tokenizing text for BERT. This wasn't specified
-# in config.json (that only stores max_position_embeddings=512, the
-# model's absolute ceiling) — 128 is a common default for short ticket
-# text. If BERT was fine-tuned with a different max_length, change this
-# to match, or predictions may be less accurate on long tickets.
 BERT_MAX_LEN = 128
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
+
 
 # ==========================================================
 # Load Resources
@@ -49,8 +51,6 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @st.cache_resource
 def load_shared_resources():
-    """Keras tokenizer + label encoder, shared by GRU/LSTM/BiLSTM and
-    used to decode BERT's predicted class index back to a category name."""
 
     with open(TOKENIZER_PATH, "rb") as f:
         tokenizer = pickle.load(f)
@@ -63,19 +63,32 @@ def load_shared_resources():
 
 @st.cache_resource
 def load_rnn_model(model_name):
-    return load_model(RNN_MODEL_PATHS[model_name])
+
+    return load_model(
+        RNN_MODEL_PATHS[model_name]
+    )
 
 
 @st.cache_resource
 def load_bert_resources():
-    bert_tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_DIR)
-    bert_model = AutoModelForSequenceClassification.from_pretrained(BERT_MODEL_DIR)
+
+    bert_tokenizer = AutoTokenizer.from_pretrained(
+        BERT_MODEL_DIR
+    )
+
+    bert_model = AutoModelForSequenceClassification.from_pretrained(
+        BERT_MODEL_DIR
+    )
+
     bert_model.to(DEVICE)
     bert_model.eval()
+
     return bert_tokenizer, bert_model
 
 
+# Load shared resources
 keras_tokenizer, label_encoder = load_shared_resources()
+
 
 # ==========================================================
 # Sidebar
@@ -83,13 +96,27 @@ keras_tokenizer, label_encoder = load_shared_resources()
 
 st.sidebar.title("🎫 Project Information")
 
+
 model_choice = st.sidebar.selectbox(
     "Choose Model",
-    ["GRU", "LSTM", "BiLSTM", "BERT"]
+    [
+        "GRU",
+        "LSTM",
+        "BiLSTM",
+        "BERT",
+        "Gemini LLM"
+    ]
 )
 
+
+# ==========================================================
+# Architecture Information
+# ==========================================================
+
 ARCH_INFO = {
+
     "GRU": """
+
 ## Model
 
 - **Architecture:** GRU
@@ -125,7 +152,9 @@ Dense
 ⬇
 Softmax
 """,
+
     "LSTM": """
+
 ## Model
 
 - **Architecture:** LSTM
@@ -161,7 +190,9 @@ Dense
 ⬇
 Softmax
 """,
+
     "BiLSTM": """
+
 ## Model
 
 - **Architecture:** Bidirectional LSTM
@@ -197,7 +228,9 @@ Dense
 ⬇
 Softmax
 """,
+
     "BERT": f"""
+
 ## Model
 
 - **Architecture:** BERT (bert-base-uncased)
@@ -230,23 +263,62 @@ Dense
 ⬇
 Softmax
 """,
+
+    "Gemini LLM": """
+
+## Model
+
+- **Architecture:** Generative LLM
+- **Model:** Gemini
+- **Type:** Instruction-based classification
+- **Method:** Prompt-based classification
+
+---
+
+## Preprocessing
+
+- Original ticket text
+- No traditional tokenization
+- Ticket is provided directly to the LLM
+
+---
+
+## Generative AI Pipeline
+
+Text
+⬇
+Classification Prompt
+⬇
+Gemini LLM
+⬇
+Category
+"""
 }
 
-st.sidebar.markdown(ARCH_INFO[model_choice])
+
+st.sidebar.markdown(
+    ARCH_INFO[model_choice]
+)
+
 
 # ==========================================================
 # Main Title
 # ==========================================================
 
-st.title("🎫 Intelligent Helpdesk Ticket Classifier")
+st.title(
+    "🎫 Intelligent Helpdesk Ticket Classifier"
+)
 
-st.markdown("""
+st.markdown(
+    """
 This application predicts the **department/category**
-for customer support tickets using your choice of a
-**GRU, LSTM, BiLSTM, or BERT** model.
-""")
+for IT support tickets using **GRU, LSTM, BiLSTM, BERT,
+or Gemini LLM**.
+"""
+)
 
 st.divider()
+
 
 # ==========================================================
 # User Input
@@ -259,22 +331,85 @@ ticket = st.text_area(
     placeholder="Describe your issue..."
 )
 
+
 # ==========================================================
 # Prediction
 # ==========================================================
 
-if st.button("🚀 Predict Category", use_container_width=True):
+if st.button(
+    "🚀 Predict Category",
+    use_container_width=True
+):
 
     if ticket.strip() == "":
-        st.warning("Please enter a support ticket.")
+        st.warning(
+            "Please enter a support ticket."
+        )
         st.stop()
 
-    if model_choice == "BERT":
 
-        with st.spinner("Loading BERT model..."):
-            bert_tokenizer, bert_model = load_bert_resources()
+    # ======================================================
+    # Gemini LLM
+    # ======================================================
+
+    if model_choice == "Gemini LLM":
+
+        with st.spinner(
+            "Gemini is analyzing the ticket..."
+        ):
+
+            predicted_category = gemini_predict(
+                ticket
+            )
+
+        st.divider()
+
+        st.subheader("🎯 Prediction")
+
+        st.success(
+            predicted_category
+        )
+
+        st.info(
+            "Prediction generated using Gemini LLM."
+        )
+
+        st.subheader("🤖 Model")
+
+        st.write(
+            "Gemini LLM"
+        )
+
+        st.subheader(
+            "📝 Ticket Sent to Gemini"
+        )
+
+        with st.expander(
+            "View Ticket"
+        ):
+
+            st.code(
+                ticket.strip()
+            )
+
+
+    # ======================================================
+    # BERT
+    # ======================================================
+
+    elif model_choice == "BERT":
+
+        with st.spinner(
+            "Loading BERT model..."
+        ):
+
+            bert_tokenizer, bert_model = (
+                load_bert_resources()
+            )
+
 
         display_text = ticket.strip()
+
 
         encoded = bert_tokenizer(
             display_text,
@@ -282,108 +417,316 @@ if st.button("🚀 Predict Category", use_container_width=True):
             truncation=True,
             padding="max_length",
             max_length=BERT_MAX_LEN,
-        ).to(DEVICE)
+        )
+
+
+        encoded = {
+            key: value.to(DEVICE)
+            for key, value in encoded.items()
+        }
+
 
         with torch.no_grad():
-            logits = bert_model(**encoded).logits
 
-        probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+            logits = bert_model(
+                **encoded
+            ).logits
+
+
+        probs = (
+            torch.softmax(
+                logits,
+                dim=1
+            )
+            .cpu()
+            .numpy()[0]
+        )
+
+
+        predicted_index = int(
+            np.argmax(probs)
+        )
+
+
+        confidence = float(
+            probs[predicted_index]
+        )
+
+
+        predicted_category = (
+            label_encoder.inverse_transform(
+                [predicted_index]
+            )[0]
+        )
+
+
+        # ==================================================
+        # Prediction Result
+        # ==================================================
+
+        st.divider()
+
+        col1, col2 = st.columns(2)
+
+
+        with col1:
+
+            st.subheader(
+                "🎯 Prediction"
+            )
+
+            st.success(
+                predicted_category
+            )
+
+
+        with col2:
+
+            st.subheader(
+                "Confidence"
+            )
+
+            st.metric(
+                label="Model Confidence",
+                value=f"{confidence:.2%}"
+            )
+
+            st.progress(
+                confidence
+            )
+
+
+        # ==================================================
+        # Top 3 Predictions
+        # ==================================================
+
+        st.subheader(
+            "🏆 Top 3 Predictions"
+        )
+
+
+        top3 = np.argsort(
+            probs
+        )[::-1][:3]
+
+
+        top3_df = pd.DataFrame({
+
+            "Category":
+                label_encoder.inverse_transform(
+                    top3
+                ),
+
+            "Confidence":
+                [
+                    f"{probs[i]:.2%}"
+                    for i in top3
+                ]
+        })
+
+
+        st.table(
+            top3_df
+        )
+
+
+        # ==================================================
+        # Probability Chart
+        # ==================================================
+
+        st.subheader(
+            "📊 Prediction Probabilities"
+        )
+
+
+        probability_df = pd.DataFrame({
+
+            "Category":
+                label_encoder.classes_,
+
+            "Probability":
+                probs
+        })
+
+
+        st.bar_chart(
+            probability_df.set_index(
+                "Category"
+            )
+        )
+
+
+        # ==================================================
+        # Text
+        # ==================================================
+
+        with st.expander(
+            "📝 View Text Sent to Model"
+        ):
+
+            st.code(
+                display_text
+            )
+
+
+    # ======================================================
+    # GRU / LSTM / BiLSTM
+    # ======================================================
 
     else:
 
-        with st.spinner(f"Loading {model_choice} model..."):
-            rnn_model = load_rnn_model(model_choice)
+        with st.spinner(
+            f"Loading {model_choice} model..."
+        ):
 
-        display_text, processed_text = preprocess_text(
-            ticket,
-            keras_tokenizer
+            rnn_model = load_rnn_model(
+                model_choice
+            )
+
+
+        display_text, processed_text = (
+            preprocess_text(
+                ticket,
+                keras_tokenizer
+            )
         )
+
 
         prediction = rnn_model.predict(
             processed_text,
             verbose=0
         )
 
+
         probs = prediction[0]
 
-    predicted_index = int(np.argmax(probs))
 
-    confidence = float(probs[predicted_index])
-
-    # NOTE: assumes BERT was fine-tuned on the same label-encoded
-    # targets as the RNN models — config.json only stores generic
-    # LABEL_0..LABEL_7, so real category names come from label_encoder.
-    predicted_category = label_encoder.inverse_transform(
-        [predicted_index]
-    )[0]
-
-    st.divider()
-
-    # ======================================================
-    # Prediction Result
-    # ======================================================
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        st.subheader("🎯 Prediction")
-
-        st.success(predicted_category)
-
-    with col2:
-
-        st.subheader("Confidence")
-
-        st.metric(
-            label="Model Confidence",
-            value=f"{confidence:.2%}"
+        predicted_index = int(
+            np.argmax(probs)
         )
 
-        st.progress(confidence)
 
-    # ======================================================
-    # Top 3 Predictions
-    # ======================================================
+        confidence = float(
+            probs[predicted_index]
+        )
 
-    st.subheader("🏆 Top 3 Predictions")
 
-    top3 = np.argsort(probs)[::-1][:3]
+        predicted_category = (
+            label_encoder.inverse_transform(
+                [predicted_index]
+            )[0]
+        )
 
-    top3_df = pd.DataFrame({
-        "Category": label_encoder.inverse_transform(top3),
-        "Confidence": [f"{probs[i]:.2%}" for i in top3]
-    })
 
-    st.table(top3_df)
+        # ==================================================
+        # Prediction Result
+        # ==================================================
 
-    # ======================================================
-    # Probability Chart
-    # ======================================================
+        st.divider()
 
-    st.subheader("📊 Prediction Probabilities")
 
-    probability_df = pd.DataFrame({
-        "Category": label_encoder.classes_,
-        "Probability": probs
-    })
+        col1, col2 = st.columns(2)
 
-    st.bar_chart(
-        probability_df.set_index("Category")
-    )
 
-    # ======================================================
-    # Processed Text
-    # ======================================================
+        with col1:
 
-    expander_label = (
-        "📝 View Cleaned Text" if model_choice != "BERT"
-        else "📝 View Text Sent to Model"
-    )
+            st.subheader(
+                "🎯 Prediction"
+            )
 
-    with st.expander(expander_label):
+            st.success(
+                predicted_category
+            )
 
-        st.code(display_text)
+
+        with col2:
+
+            st.subheader(
+                "Confidence"
+            )
+
+            st.metric(
+                label="Model Confidence",
+                value=f"{confidence:.2%}"
+            )
+
+            st.progress(
+                confidence
+            )
+
+
+        # ==================================================
+        # Top 3 Predictions
+        # ==================================================
+
+        st.subheader(
+            "🏆 Top 3 Predictions"
+        )
+
+
+        top3 = np.argsort(
+            probs
+        )[::-1][:3]
+
+
+        top3_df = pd.DataFrame({
+
+            "Category":
+                label_encoder.inverse_transform(
+                    top3
+                ),
+
+            "Confidence":
+                [
+                    f"{probs[i]:.2%}"
+                    for i in top3
+                ]
+        })
+
+
+        st.table(
+            top3_df
+        )
+
+
+        # ==================================================
+        # Probability Chart
+        # ==================================================
+
+        st.subheader(
+            "📊 Prediction Probabilities"
+        )
+
+
+        probability_df = pd.DataFrame({
+
+            "Category":
+                label_encoder.classes_,
+
+            "Probability":
+                probs
+        })
+
+
+        st.bar_chart(
+            probability_df.set_index(
+                "Category"
+            )
+        )
+
+
+        # ==================================================
+        # Processed Text
+        # ==================================================
+
+        with st.expander(
+            "📝 View Cleaned Text"
+        ):
+
+            st.code(
+                display_text
+            )
+
 
 # ==========================================================
 # Footer
@@ -392,5 +735,6 @@ if st.button("🚀 Predict Category", use_container_width=True):
 st.divider()
 
 st.caption(
-    "Developed using TensorFlow • PyTorch • Transformers • NLP • Streamlit"
+    "Developed using TensorFlow • PyTorch • Transformers • "
+    "Gemini • NLP • Streamlit"
 )
