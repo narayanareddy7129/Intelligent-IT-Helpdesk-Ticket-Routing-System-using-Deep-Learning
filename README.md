@@ -549,12 +549,6 @@ For major changes, please open an issue first to discuss what you'd like to chan
 
 ---
 
-## 📄 License
-
-> Add your chosen license here (for example, the MIT License) and include a corresponding `LICENSE` file in the repository root.
-
----
-
 ## 📚 Learning Outcomes
 
 Through this project, I gained hands-on experience with:
